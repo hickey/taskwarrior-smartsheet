@@ -241,7 +241,7 @@ if __name__ == '__main__':
     ## Display a list of sheets available to sync
     elif args.list is not None:
         sheets = api.list_sheets(filter=args.list)
-        
-        print('Listing sheets: %s\n' % sheets)
+        for name in sheets.values():
+            print('\t%s' % name)
         
     
