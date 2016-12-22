@@ -12,10 +12,10 @@ from smartsheet import *
 CONF_FILE = os.getenv('TASK_SS_CONF') or '~/.task/smartsheet.conf'
 
 
-class Keystore:
+class ConfigStore:
     
     def __init__(self, conf_file=CONF_FILE):
-        """SSconfig(conf_file=CONF_FILE): object
+        """ConfigStore(conf_file=CONF_FILE): object
         Read in the configuration file for locating API keys to connect to the
         Smartsheet API. The config file location can be controlled externally 
         by setting the environmental variable TASK_SS_CONF to the config file
@@ -221,27 +221,37 @@ if __name__ == '__main__':
     parser.add_argument('--config', '-f', default=CONF_FILE, type=str, 
                         metavar='FILE',
                         help='Read specified config file for API keys')
+    parser.add_argument('command', type=str, nargs='?',
+                        choices=['add', 'delete', 'modify', 'sync'])
+    
     
     args = parser.parse_args()
     
     
     # load the configs for connecting to Smartsheet API
-    keys = Keystore(args.config)
-    if keys.default_key():
-        api = SheetAPI(keys)
-    else: 
+    config = ConfigStore(args.config)
+    try:
+        if config.default_key():
+            api = SheetAPI(config)
+    except RuntimeError:
+        if not args.default_key:
+            print('Default API key has not yet been set.')
         api = None
     
     
     ## Save a default key for future use
     if args.default_key:
-        keys.add_key(args.default_key)
-        keys.save_keys()
+        config.add_key(args.default_key)
+        config.save_keys()
     
     ## Display a list of sheets available to sync
-    elif args.list is not None:
+    elif args.list is not None and api is not None:
         sheets = api.list_sheets(filter=args.list)
-        for name in sheets.values():
-            print('\t%s' % name)
+        for id,name in sheets.items():
+            print('%22d : %s' % (id, name))
         
+    ## Check for a command
+    elif args.command:
+        if args.command == 'add':
+            print "add"
     

@@ -40,3 +40,9 @@ In order for this Taskwarrior extension to be used, one must install the followi
     task-ss --list foo
     task-ss --list foo '!bar'
     
+    
+    task-ss --sheet 12345768 --project Fooamatic add
+    
+    task-ss --sheet 12345678 remove
+    
+    task-ss sync
