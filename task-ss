@@ -1,0 +1,149 @@
+#!/usr/bin/env python
+
+import os,sys,re
+import argparse
+import json
+
+from taskw import TaskWarrior
+from smartsheet import *
+
+
+# Constants
+CONF_FILE = os.getenv('TASK_SS_CONF') or '~/.task/smartsheet.conf'
+
+
+class Keystore:
+    
+    def __init__(self, conf_file=CONF_FILE):
+        """SSconfig(conf_file=CONF_FILE): object
+        Read in the configuration file for locating API keys to connect to the
+        Smartsheet API. The config file location can be controlled externally 
+        by setting the environmental variable TASK_SS_CONF to the config file
+        location. Environmental variables and tilde (~) can be used to specify 
+        the file location. All parent directories must exist, but the file will
+        be created if it does not exist."""
+        
+        self.keys = {}
+        self.conf_file = os.path.expandvars( 
+                         os.path.expanduser(conf_file))
+        
+        # expand conf_dir and test if we can proceed
+        conf_dir = os.path.dirname(self.conf_file)
+        if not os.path.exists(conf_dir):
+            raise RuntimeError('Parent directory does not exist: ', conf_dir)
+        elif not os.path.isdir(conf_dir):
+            raise RuntimeError('Parent is not a directory: ', conf_dir)
+        
+        # Stream in the config file if it exists
+        if os.path.exists(self.conf_file):
+            with open(self.conf_file, 'r') as fh:
+                for line in fh.readlines():
+                    line.strip()
+                    id,key = line.split(':')
+                    self.add_key(key, id)
+        
+    
+    def add_key(self, key, sheet_id='0'):
+        """add_key(key, sheet_id=0)
+        Add an API key to the Keystore object. If the sheet_id is not 
+        specified, then the default key will be used."""
+        
+        self.keys[sheet_id] = key
+        
+        print(self.keys)
+        
+    def del_key(self, key=None, sheet_id=None):
+        """del_key(key=None, sheet_id=None)
+        Remove an API key from the Keystore object. Either the key or the
+        sheet_id may be specified to locate the key to remove."""
+        
+        if sheet_id:
+            self.keys.delete(sheet_id)
+        elif key:
+            for id,api_key in self.keys.items():
+                if api_key == key:
+                    self.keys.delete(id)
+        else:
+            raise RuntimeError('API key nor sheet ID specified for del_key')
+    
+    def default_key(self):
+        if self.keys.has_attr('0'):
+            return self.keys['0']
+        else:
+            raise RuntimeError('Default API key not defined') 
+
+    def save_keys(self):
+        """save_keys()
+        Take all existing keys in the Keystore object to the config file."""
+
+        with open(self.conf_file, 'w') as fh:
+            for sheet_id, key in self.keys.items():
+                fh.write("{0}:{1}\n".format(sheet_id, key))
+
+
+class SheetAPI:
+    
+    def __init__(self, keystore=None):
+        
+        if not keystore:
+            raise RuntimeError('SheetsAPI needs reference to the keystore')
+        self.keystore = keystore
+        
+        
+        
+    def list_sheets(self, filter=None):
+        """list_sheets(filter=None): Dict
+        Connect to the Smartsheet API and request a list of sheets for the given
+        filter. If not filter is specified (empty string or None) then all
+        sheets will be requested. """
+
+        data = json.loads(Sheets.list_sheets(include_all=True))
+
+
+
+if __name__ == '__main__':
+    
+    # Proceess command line args
+    parser = argparse.ArgumentParser(description='Taskwarrior to Smartsheet Sync')
+
+    parser.add_argument('--list', '-l', default=None, type=str, nargs='*',
+                        metavar='SEARCH_TEXT', 
+                        help='List available Smartsheets')
+    parser.add_argument('--sheet', '-s', default=None, type=int, metavar='ID',
+                        help='Smartsheet ID to setup a sync for')
+    parser.add_argument('--key', '-k', default=None, type=str, 
+                        metavar='API_KEY',
+                        help='Specify API key to access sheets')
+    parser.add_argument('--project', '-P', default=None, type=str,
+                        metavar='NAME',
+                        help='Taskwarrior project to associate with sheet')
+    parser.add_argument('--default-key', '-K', default=None, type=str,
+                        metavar='API_KEY',
+                        help='Set default Smartsheet API key')
+    parser.add_argument('--config', '-f', default=CONF_FILE, type=str, 
+                        metavar='FILE',
+                        help='Read specified config file for API keys')
+    
+    args = parser.parse_args()
+    
+    
+    # load the configs for connecting to Smartsheet API
+    keys = Keystore(args.config)
+    if keys.default_key():
+        api = SheetAPI(keys)
+    else: 
+        api = None
+    
+    
+    ## Save a default key for future use
+    if args.default_key:
+        keys.add_key(args.default_key)
+        keys.save_keys()
+    
+    ## Display a list of sheets available to sync
+    elif args.list is not None:
+        sheets = api.list_sheets(filter=args.list)
+        
+        print('Listing sheets: %s\n' % args.list )
+        
+    
