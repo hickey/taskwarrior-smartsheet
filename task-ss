@@ -23,7 +23,7 @@ class ConfigStore:
         the file location. All parent directories must exist, but the file will
         be created if it does not exist."""
         
-        self.keys = {}
+        self.config = {'key':{}, 'proj':{}, }
         self.conf_file = os.path.expandvars( 
                          os.path.expanduser(conf_file))
         
@@ -35,11 +35,7 @@ class ConfigStore:
             raise RuntimeError('Parent is not a directory: ', conf_dir)
         
         # Stream in the config file if it exists
-        if os.path.exists(self.conf_file):
-            with open(self.conf_file, 'r') as fh:
-                for line in fh.readlines():
-                    id,key = line.rstrip('\n').split(':')
-                    self.add_key(key, id)
+        self._load_config(self.conf_file)
         
     
     def add_key(self, key, sheet_id='0'):
@@ -47,7 +43,8 @@ class ConfigStore:
         Add an API key to the Keystore object. If the sheet_id is not 
         specified, then the default key will be used."""
         
-        self.keys[sheet_id] = key
+        self._set('key', sheet_id, key)
+        
         
     def del_key(self, key=None, sheet_id=None):
         """del_key(key=None, sheet_id=None)
@@ -55,28 +52,57 @@ class ConfigStore:
         sheet_id may be specified to locate the key to remove."""
         
         if sheet_id:
-            self.keys.delete(sheet_id)
+            self._del('key', sheet_id)
         elif key:
-            for id,api_key in self.keys.items():
+            for id,api_key in self.config['key'].items():
                 if api_key == key:
-                    self.keys.delete(id)
+                    self._del('key', id)
         else:
             raise RuntimeError('API key nor sheet ID specified for del_key')
     
     def default_key(self):
-        if self.keys.has_key('0'):
-            return self.keys['0']
+        if self.config['key'].has_key('0'):
+            return self.config['key']['0']
         else:
             raise RuntimeError('Default API key not defined') 
 
-    def save_keys(self):
-        """save_keys()
+    def save(self):
+        """save()
         Take all existing keys in the Keystore object to the config file."""
 
-        with open(self.conf_file, 'w') as fh:
-            for sheet_id, key in self.keys.items():
-                fh.write("{0}:{1}\n".format(sheet_id, key))
+        self._save_config()
+        
 
+    def _set(self, type, key, val):
+        self.config[type][key] = val
+        
+    def _get(self, type, key):
+        return self.config[type][key]
+        
+    def _del(self, type, key):
+        if self.config[type].has_key(key):
+            self.config[type][key].delete
+    
+    def _load_config(self, conf_file):
+        data = {}
+        if os.path.exists(conf_file):
+            with open(conf_file, 'r') as fh:
+                for line in fh.readlines():
+                    if line.startswith('key;'):
+                        id,key = line.rstrip('\n').replace('key;','').split(':')
+                        self._set('key', id, key)
+                    elif line.startswith('proj;'):
+                        id,name = line.rstrip('\n').replace('proj;','').split(':')
+                        self._set('proj', id, name)
+                        
+                        
+    def _save_config(self):
+        with open(self.conf_file, 'w') as fh:
+            for sheet_id, key in self.config['key'].items():
+                fh.write("key;{0}:{1}\n".format(sheet_id, key))
+            for sheet_id, key in self.config['proj'].items():
+                fh.write("proj;{0}:{1}\n".format(sheet_id, key))
+                
 
 class SheetAPI:
     
@@ -164,7 +190,7 @@ if __name__ == '__main__':
     ## Save a default key for future use
     if args.default_key:
         config.add_key(args.default_key)
-        config.save_keys()
+        config.save()
     
     ## Display a list of sheets available to sync
     elif args.list is not None and api is not None:
