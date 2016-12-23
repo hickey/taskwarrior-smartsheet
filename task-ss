@@ -2,7 +2,7 @@
 
 import os,sys,re
 import argparse
-import json
+import logging
 
 from taskw import TaskWarrior
 from smartsheet import *
@@ -38,8 +38,7 @@ class ConfigStore:
         if os.path.exists(self.conf_file):
             with open(self.conf_file, 'r') as fh:
                 for line in fh.readlines():
-                    line.strip()
-                    id,key = line.split(':')
+                    id,key = line.rstrip('\n').split(':')
                     self.add_key(key, id)
         
     
@@ -90,111 +89,27 @@ class SheetAPI:
         self.service = smartsheet.Smartsheet(self.keystore.default_key())
 
         
-        
     def list_sheets(self, filter=None):
         """list_sheets(filter=None): Dict
         Connect to the Smartsheet API and request a list of sheets for the given
         filter. If not filter is specified (empty string or None) then all
         sheets will be requested. """
-
-        #data = json.loads(self.service.list_sheets(include_all=True))
-        data = json.loads('''{
-  "pageNumber": 1,
-  "pageSize": 100,
-  "totalPages": 1,
-  "totalCount": 9,
-  "data": [
-    {
-      "id": 2824089208416132,
-      "name": "Company Startup Tasks",
-      "accessLevel": "ADMIN",
-      "permalink": "https://app.smartsheet.com/b/home?lx=KDTsqvR4mYRzzy03RNXb9g",
-      "createdAt": "2016-12-13T19:25:32Z",
-      "modifiedAt": "2016-12-15T22:09:59Z"
-    },
-    {
-      "id": 212451665962884,
-      "name": "Inventory Management",
-      "accessLevel": "ADMIN",
-      "permalink": "https://app.smartsheet.com/b/home?lx=-MJ9DuLjEW6Nl6VJKOzrIA",
-      "createdAt": "2016-12-16T22:57:31Z",
-      "modifiedAt": "2016-12-16T22:57:30Z"
-    },
-    {
-      "id": 6945333667227524,
-      "name": "List of Potential Company Names",
-      "accessLevel": "ADMIN",
-      "permalink": "https://app.smartsheet.com/b/home?lx=_abHkK2vkXMchsDBkYiVVA",
-      "createdAt": "2016-12-14T16:59:31Z",
-      "modifiedAt": "2016-12-15T19:45:05Z"
-    },
-    {
-      "id": 1478041089140612,
-      "name": "Marketing Campaign Analysis Rollup",
-      "accessLevel": "ADMIN",
-      "permalink": "https://app.smartsheet.com/b/home?lx=DnO7LWNZmRQA048JMjInNg",
-      "createdAt": "2016-12-16T22:53:55Z",
-      "modifiedAt": "2016-12-16T22:53:55Z"
-    },
-    {
-      "id": 1329040083707780,
-      "name": "Potential Clients",
-      "accessLevel": "ADMIN",
-      "permalink": "https://app.smartsheet.com/b/home?lx=PV8Q8O73hmxQkegZhC1q_w",
-      "createdAt": "2016-12-14T00:16:01Z",
-      "modifiedAt": "2016-12-14T00:22:12Z"
-    },
-    {
-      "id": 8094506928105348,
-      "name": "Recurring Task List",
-      "accessLevel": "ADMIN",
-      "permalink": "https://app.smartsheet.com/b/home?lx=6VTI11U4ndYGOYKZiVcClQ",
-      "createdAt": "2016-12-16T22:56:18Z",
-      "modifiedAt": "2016-12-16T22:56:18Z"
-    },
-    {
-      "id": 2604164334282628,
-      "name": "SEO Checklist",
-      "accessLevel": "ADMIN",
-      "permalink": "https://app.smartsheet.com/b/home?lx=_E0q_5fI4BfStiDUeZxA3Q",
-      "createdAt": "2016-12-16T20:18:14Z",
-      "modifiedAt": "2016-12-16T23:09:38Z"
-    },
-    {
-      "id": 1339107487049604,
-      "name": "Smartsheet Getting Started Tip Sheet",
-      "accessLevel": "ADMIN",
-      "permalink": "https://app.smartsheet.com/b/home?lx=6URXuFHR267e9iMuIonymQ",
-      "createdAt": "2016-12-16T22:55:04Z",
-      "modifiedAt": "2016-12-16T22:55:04Z"
-    },
-    {
-      "id": 6932288777807748,
-      "name": "Target Industries",
-      "accessLevel": "OWNER",
-      "permalink": "https://app.smartsheet.com/b/home?lx=NqDQzgSOro3DD_Z-RwaLNA",
-      "createdAt": "2016-12-15T23:58:12Z",
-      "modifiedAt": "2016-12-19T18:05:39Z"
-    }
-  ]
-}
-''')
     
         sheets = {}
-        for entry in data['data']:
+        for sheet in self.service.Sheets.list_sheets(include_all=True).data:
             match = True
             for text in filter:
                 if text.startswith('!'):
                     # negative match (term found, deny match)
-                    if re.search(text[1:], entry['name'], re.I):
+                    if re.search(text[1:], sheet.name, re.I):
                         match = False
                 else:
                     # positive match (term found, allow match)
-                    if not re.search(text, entry['name'], re.I):
+                    if not re.search(text, sheet.name, re.I):
                         match = False
                     
             if match:
-                sheets[entry['id']] = entry['name']
+                sheets[sheet.id] = sheet.name
 
         return sheets
 
@@ -226,6 +141,13 @@ if __name__ == '__main__':
     
     
     args = parser.parse_args()
+    
+    
+    #logging.basicConfig()
+    #logging.getLogger().setLevel(logging.DEBUG)
+    #requests_log = logging.getLogger("requests.packages.urllib3")
+    #requests_log.setLevel(logging.DEBUG)
+    #requests_log.propagate = True
     
     
     # load the configs for connecting to Smartsheet API
