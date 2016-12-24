@@ -3,13 +3,14 @@
 import os,sys,re
 import argparse
 import logging
+import json
 
 from taskw import TaskWarrior
 from smartsheet import *
 
 
 # Constants
-CONF_FILE = os.getenv('TASK_SS_CONF') or '~/.task/smartsheet.conf'
+CONF_FILE = os.getenv('TASK_SS_CONF') or '~/.task/smartsheet.json'
 
 
 class ConfigStore:
@@ -23,7 +24,7 @@ class ConfigStore:
         the file location. All parent directories must exist, but the file will
         be created if it does not exist."""
         
-        self.config = {'key':{}, 'proj':{}, }
+        self.config = {'key': None, 'proj': {}, }
         self.conf_file = os.path.expandvars( 
                          os.path.expanduser(conf_file))
         
@@ -36,33 +37,23 @@ class ConfigStore:
         
         # Stream in the config file if it exists
         self._load_config(self.conf_file)
+    
+    
+    def add_project(self, name, sheet, key=None):
+            
+        self._set('proj', sheet, name)
         
     
-    def add_key(self, key, sheet_id='0'):
-        """add_key(key, sheet_id=0)
-        Add an API key to the Keystore object. If the sheet_id is not 
-        specified, then the default key will be used."""
+    def set_default_key(self, key):
+        """set_default_key(key)
+        Save a default key that can be used when a key has not been specified
+        on a sheet."""
+        self.config['key'] = key
         
-        self._set('key', sheet_id, key)
         
-        
-    def del_key(self, key=None, sheet_id=None):
-        """del_key(key=None, sheet_id=None)
-        Remove an API key from the Keystore object. Either the key or the
-        sheet_id may be specified to locate the key to remove."""
-        
-        if sheet_id:
-            self._del('key', sheet_id)
-        elif key:
-            for id,api_key in self.config['key'].items():
-                if api_key == key:
-                    self._del('key', id)
-        else:
-            raise RuntimeError('API key nor sheet ID specified for del_key')
-    
     def default_key(self):
-        if self.config['key'].has_key('0'):
-            return self.config['key']['0']
+        if self.config['key']:
+            return self.config['key']
         else:
             raise RuntimeError('Default API key not defined') 
 
@@ -72,7 +63,12 @@ class ConfigStore:
 
         self._save_config()
         
-
+        
+    def projects(self):
+        for item in self.config['proj'].keys():
+            yield [item, self.config['proj'][item]]
+ 
+ 
     def _set(self, type, key, val):
         self.config[type][key] = val
         
@@ -84,35 +80,25 @@ class ConfigStore:
             self.config[type][key].delete
     
     def _load_config(self, conf_file):
-        data = {}
         if os.path.exists(conf_file):
             with open(conf_file, 'r') as fh:
-                for line in fh.readlines():
-                    if line.startswith('key;'):
-                        id,key = line.rstrip('\n').replace('key;','').split(':')
-                        self._set('key', id, key)
-                    elif line.startswith('proj;'):
-                        id,name = line.rstrip('\n').replace('proj;','').split(':')
-                        self._set('proj', id, name)
+                self.config = json.load(fh)
                         
                         
     def _save_config(self):
         with open(self.conf_file, 'w') as fh:
-            for sheet_id, key in self.config['key'].items():
-                fh.write("key;{0}:{1}\n".format(sheet_id, key))
-            for sheet_id, key in self.config['proj'].items():
-                fh.write("proj;{0}:{1}\n".format(sheet_id, key))
+            json.dump(self.config, fh)
                 
 
 class SheetAPI:
     
-    def __init__(self, keystore=None):
+    def __init__(self, config=None):
         
-        if not keystore:
-            raise RuntimeError('SheetsAPI needs reference to the keystore')
-        self.keystore = keystore
+        if not config:
+            raise RuntimeError('SheetsAPI needs reference to the configuration')
+        self.config = config
         
-        self.service = smartsheet.Smartsheet(self.keystore.default_key())
+        self.service = smartsheet.Smartsheet(self.config.default_key())
 
         
     def list_sheets(self, filter=None):
@@ -139,6 +125,24 @@ class SheetAPI:
 
         return sheets
 
+
+    def gather_tasks(self):
+        
+        tasks = {}
+        
+        for name, entry in self.config.projects():
+            print "name=%s" % name
+            print "entry=%s" % entry
+            # retrieve API key
+            #key = self.config.find_key_for_sheet(entry[])
+            # retrieve sheet
+            
+            # walk through rows
+            
+            # generate task data
+            
+            
+        
 
 if __name__ == '__main__':
     
@@ -189,7 +193,7 @@ if __name__ == '__main__':
     
     ## Save a default key for future use
     if args.default_key:
-        config.add_key(args.default_key)
+        config.set_default_key(args.default_key)
         config.save()
     
     ## Display a list of sheets available to sync
@@ -201,5 +205,24 @@ if __name__ == '__main__':
     ## Check for a command
     elif args.command:
         if args.command == 'add':
-            print "add"
+            # add needs to have sheet, proj and a key
+            if not args.sheet:
+                print("Sheet ID needs to be specified.")
+                sys.exit(1)
+            if not args.project:
+                print("Project name needs to be specified.")
+                sys.exit(1)
+            if not args.key and not config.default_key():
+                print("Need an API key to add sheet.")
+                sys.exit(1)
+                
+            config.add_project(name=args.project, sheet=args.sheet, 
+                               key=args.key)
+            config.save()
+            
+        if args.command == 'sync':
+            
+            tasks = api.gather_tasks()
+            
+            #print tasks
     
