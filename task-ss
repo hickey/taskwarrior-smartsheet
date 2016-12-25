@@ -7,6 +7,10 @@ import json
 
 from taskw import TaskWarrior
 from smartsheet import *
+from datetime import datetime
+from dateutil.parser import parse as date_parse
+
+from pprint import pprint
 
 
 # Constants
@@ -39,9 +43,11 @@ class ConfigStore:
         self._load_config(self.conf_file)
     
     
-    def add_project(self, name, sheet, key=None):
-            
-        self._set('proj', sheet, name)
+    def add_project(self, name, sheet, key=None, col_defs=None):
+        record = { 'id': sheet, 'name': name, 'cols': col_defs }
+        if key:
+            record['key'] = key
+        self._set('proj', sheet, record)
         
     
     def set_default_key(self, key):
@@ -66,8 +72,15 @@ class ConfigStore:
         
     def projects(self):
         for item in self.config['proj'].keys():
-            yield [item, self.config['proj'][item]]
+            record = self.project_settings(item)
+            yield record
  
+ 
+    def project_settings(self, id):
+        record = self.config['proj'][id]
+        if not record.has_key('key'):
+            record['key'] = self.default_key()
+        return record
  
     def _set(self, type, key, val):
         self.config[type][key] = val
@@ -82,14 +95,81 @@ class ConfigStore:
     def _load_config(self, conf_file):
         if os.path.exists(conf_file):
             with open(conf_file, 'r') as fh:
-                self.config = json.load(fh)
-                        
-                        
+                try:
+                    self.config = json.load(fh)
+                except ValueError:
+                    print "Config file corrupted. Clearing config values"
+
+
     def _save_config(self):
+        print "config = %s" % self.config
         with open(self.conf_file, 'w') as fh:
             json.dump(self.config, fh)
-                
 
+
+class Field:
+    def __init__(self, value):
+        self.value = value
+        
+    def __repr__(self):
+        return self.value
+        
+        
+class DateField(Field):
+    
+    def __init__(self, datetext):
+        if datetext.__class__ == datetime:
+            self.value = datetext
+        elif datetext.__class__ == str or datetext.__class__ == unicode:
+            if re.match(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\+\d\d:\d\d)?', datetext):
+                # 2016-12-24T18:43:12+00:00
+                self.value = date_parse(datetext)
+            else:
+                raise RuntimeError('Unknown string date format: %s' % datetext)
+        elif datetext is None:
+            self.value = None
+        else:
+            raise RuntimeError('Unknown date format: %s' % datetext)
+           
+class UuidField(Field):
+    import uuid
+    
+    def __init__(self, uuidtext):
+        if uuidtext.__class__ == uuid.UUID:
+            self.value = uuidtext
+        else:
+            self.value = uuid.UUID(uuidtext)
+             
+
+class Task:
+    
+    def __init__(self, desc, **kw):
+        self.description = Field(desc)
+        
+        if kw.has_key('tw_id'):
+            self.tw_id = Field(kw['tw_id'])
+        if kw.has_key('tw_uuid'):
+            self.tw_uuid = UuidField(kw['tw_uuid'])
+        if kw.has_key('ss_uuid'):
+            self.ss_uuid = Field(kw['ss_uuid'])
+        if kw.has_key('scheduled'):
+            self.scheduled = DateField(kw['scheduled'])
+        if kw.has_key('due'):
+            self.due = DateField(kw['due'])
+        if kw.has_key('modified'):
+            self.modified = DateField(kw['modified'])
+        if kw.has_key('assignee'):
+            self.assignee = Field(kw['assignee'])
+        if kw.has_key('depends'):
+            self.depends = Field(kw['depends'])
+        if kw.has_key('status'):
+            self.status = Field(kw['status'])
+
+        
+    def __repr__(self):
+        return "<Task: %s>" % self.description
+        
+        
 class SheetAPI:
     
     def __init__(self, config=None):
@@ -98,8 +178,6 @@ class SheetAPI:
             raise RuntimeError('SheetsAPI needs reference to the configuration')
         self.config = config
         
-        self.service = smartsheet.Smartsheet(self.config.default_key())
-
         
     def list_sheets(self, filter=None):
         """list_sheets(filter=None): Dict
@@ -108,7 +186,8 @@ class SheetAPI:
         sheets will be requested. """
     
         sheets = {}
-        for sheet in self.service.Sheets.list_sheets(include_all=True).data:
+        api = smartsheet.Smartsheet(self.config.default_key())
+        for sheet in api.Sheets.list_sheets(include_all=True).data:
             match = True
             for text in filter:
                 if text.startswith('!'):
@@ -126,23 +205,147 @@ class SheetAPI:
         return sheets
 
 
+    def add_project(self, name, sheet_id, key=None):
+        column_info = {}
+        
+        # pull the sheet to get the column info
+        if not key:
+            key = self.config.default_key()
+        api = smartsheet.Smartsheet(key)
+        sheet = api.Sheets.get_sheet(sheet_id)
+        
+        # discover the column info 
+        if sheet.gantt_enabled:
+            # project sheet
+            column_info = { 
+                'description': self._find_col_id(sheet.columns, 'Task Name'),
+                'scheduled': self._find_col_id(sheet.columns, 'Start'),
+                'due': self._find_col_id(sheet.columns, 'Finish'),
+                'depends': self._find_col_id(sheet.columns, 'Predecessors'),
+                'assignee': self._find_col_id(sheet.columns, 'Assigned To'),
+                'done': None,
+                'status': self._find_col_id(sheet.columns, 'Status')
+            }
+        
+        else:
+            # task list sheet
+            column_info = { 
+                'description': self._find_col_id(sheet.columns, 'Task Name'),
+                'scheduled': None,
+                'due': self._find_col_id(sheet.columns, 'Due Date'),
+                'depends': None,
+                'assignee': self._find_col_id(sheet.columns, 'Assigned To'),
+                'done': self._find_col_id(sheet.columns, 'Done'),
+                'status': self._find_col_id(sheet.columns, 'Status')
+            }
+        
+        self.config.add_project(name, sheet_id, key, column_info)
+        
+        
     def gather_tasks(self):
         
-        tasks = {}
+        tasks = []
+    
         
-        for name, entry in self.config.projects():
-            print "name=%s" % name
-            print "entry=%s" % entry
-            # retrieve API key
-            #key = self.config.find_key_for_sheet(entry[])
+        for entry in self.config.projects():
+            # create an api connection to retreive sheet
+            api = smartsheet.Smartsheet(entry['key'])
+            
             # retrieve sheet
+            sheet = api.Sheets.get_sheet(entry['id'])
             
             # walk through rows
+            row_count = len(sheet.rows) - 1
+            for row_num in range(row_count):
+                task_data = {}
+                row_data = sheet.rows[row_num]
+                
+                # Is this row a heading?
+                if sheet.rows[row_num+1].parent_id == row_data.id:
+                    continue
+                
+                task = Task(self._extract(row_data, entry['cols']['description']),
+                            tw_id=row_data.id,
+                            scheduled=self._extract(row_data, entry['cols']['scheduled']),
+                            due=self._extract(row_data, entry['cols']['due']),
+                            assignee=self._extract(row_data, entry['cols']['assignee']),
+                            status=self._extract(row_data, entry['cols']['status']),
+                            modified=row_data.modified_at)
+
+                # save task information
+                tasks.append(task)
             
-            # generate task data
-            
+        return tasks
+        
             
         
+    def _find_col_id(self, col_def, title):
+        for cdef in col_def:
+            if cdef.title == title:
+                return cdef.id
+        return None
+
+    def _extract(self, data, col_id):
+        for cell in data.cells:
+            if cell.column_id == col_id:
+                return cell.value
+        return None
+        
+        
+
+class Warrior:
+    
+    def __init__(self, config):
+        self.config = config
+        self.tw = TaskWarrior(marshal=True)
+        tw_config = self.tw.load_config()
+        if not tw_config['uda'].has_key('ss_uuid'):
+            raise RuntimeError('ss_uuid UDA not defined')
+            
+        
+    def gather_tasks(self):
+        
+        tasks = self.tw.load_tasks()
+        
+        completed = filter(lambda x: x.has_key('ss_uuid'), tasks['completed'])
+        pending = filter(lambda x: x.has_key('ss_uuid'), tasks['pending'])
+        ss_tasks = completed + pending
+        
+        # Normalize all the Smartsheet tasks
+        norm_task = []
+        for task in ss_tasks:
+            
+            intermediate = { 'id': task['ss_uuid'],
+                             'description': task['description'],
+                             'scheduled': task['scheduled'], 
+                             'due': task['due'],
+                             
+            
+        }
+            
+            task_data['id'] = row_data.id
+            
+            # description
+            task_data['description'] = self._extract(row_data, 
+                                            entry['cols']['description'])
+            # scheduled
+            task_data['scheduled'] = self._extract(row_data, 
+                                            entry['cols']['scheduled'])
+            # due
+            task_data['due'] = self._extract(row_data, 
+                                            entry['cols']['due'])
+            # assignee
+            task_data['assignee'] = self._extract(row_data, 
+                                            entry['cols']['assignee'])
+            # done
+            task_data['depends'] = self._extract(row_data, 
+                                            entry['cols']['depends'])
+            # status
+            task_data['status'] = self._extract(row_data, 
+                                            entry['cols']['status'])
+            
+            task_data['modify_at'] = row_data.modified_at
+            
 
 if __name__ == '__main__':
     
@@ -167,7 +370,7 @@ if __name__ == '__main__':
                         metavar='FILE',
                         help='Read specified config file for API keys')
     parser.add_argument('command', type=str, nargs='?',
-                        choices=['add', 'delete', 'modify', 'sync'])
+                        choices=['add', 'delete', 'modify', 'sync', 'info'])
     
     
     args = parser.parse_args()
@@ -216,13 +419,19 @@ if __name__ == '__main__':
                 print("Need an API key to add sheet.")
                 sys.exit(1)
                 
-            config.add_project(name=args.project, sheet=args.sheet, 
+            api.add_project(name=args.project, sheet_id=args.sheet, 
                                key=args.key)
             config.save()
             
-        if args.command == 'sync':
+        elif args.command == 'sync':
+            # retrieve a list of tasks from Smartsheet
+            ss_tasks = api.gather_tasks()
+
+            # retrieve a list of linked tasks from TaskWarrior
+            war = Warrior(config)
+            tw_tasks = war.gather_tasks()
             
-            tasks = api.gather_tasks()
             
-            #print tasks
-    
+        elif args.command == 'info':
+            api = smartsheet.Smartsheet(config.default_key())
+            print api.Sheets.get_sheet(args.sheet)
