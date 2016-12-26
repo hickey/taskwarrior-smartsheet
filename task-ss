@@ -105,86 +105,87 @@ class ConfigStore:
         with open(self.conf_file, 'w') as fh:
             json.dump(self.config, fh)
 
-
-class Field:
-    def __init__(self, value):
-        if value.__class__ == str:
-            self.value = value
-        elif value.__class__ == int:
-            self.value = str(value)
-        elif value.__class__ == smartsheet.models.cell.Cell:
-            self.value = value.value
-        else:
-            raise RuntimeError('Unknown field format: (%s)%s' % (value.__class__, value))
-        
-    def __str__(self):
-        if self.value:
-            return self.value
-        else:
-            return 'None'
-            
-        
-class DateField(Field):
-    
-    def __init__(self, datetext):
-        if datetext.__class__ == datetime:
-            self.value = datetext
-        elif datetext.__class__ == str or datetext.__class__ == unicode:
-            if re.match(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\+\d\d:\d\d)?', datetext):
-                # 2016-12-24T18:43:12+00:00
-                self.value = date_parse(datetext)
-            else:
-                raise RuntimeError('Unknown string date format: %s' % datetext)
-        elif datetext.__class__ == smartsheet.models.cell.Cell:
-            if datetext.value is None:
-                self.value = None
-            else:
-                self.value = date_parse(datetext.value)
-        elif datetext is None:
-            self.value = None
-        else:
-            raise RuntimeError('Unknown date format: %s' % datetext)
-            
-    def __str__(self):
-        return self.value.__str__()
-        
-           
-class UuidField(Field):
-    import uuid
-    
-    def __init__(self, uuidtext):
-        if uuidtext.__class__ == uuid.UUID:
-            self.value = uuidtext
-        else:
-            self.value = uuid.UUID(uuidtext)
              
 
 class Task:
     
+    class Field:
+        def __init__(self, value):
+            if value.__class__ == str:
+                self.value = value
+            elif value.__class__ == int:
+                self.value = str(value)
+            elif value.__class__ == smartsheet.models.cell.Cell:
+                self.value = value.value
+            else:
+                raise RuntimeError('Unknown field format: (%s)%s' % (value.__class__, value))
+        
+        def __str__(self):
+            if self.value:
+                return self.value
+            else:
+                return 'None'
+            
+        
+    class DateField(Field):
+    
+        def __init__(self, datetext):
+            if datetext.__class__ == datetime:
+                self.value = datetext
+            elif datetext.__class__ == str or datetext.__class__ == unicode:
+                if re.match(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\+\d\d:\d\d)?', datetext):
+                    # 2016-12-24T18:43:12+00:00
+                    self.value = date_parse(datetext)
+                else:
+                    raise RuntimeError('Unknown string date format: %s' % datetext)
+            elif datetext.__class__ == smartsheet.models.cell.Cell:
+                if datetext.value is None:
+                    self.value = None
+                else:
+                    self.value = date_parse(datetext.value)
+            elif datetext is None:
+                self.value = None
+            else:
+                raise RuntimeError('Unknown date format: %s' % datetext)
+            
+        def __str__(self):
+            return self.value.__str__()
+        
+           
+    class UuidField(Field):
+        import uuid
+    
+        def __init__(self, uuidtext):
+            if uuidtext.__class__ == uuid.UUID:
+                self.value = uuidtext
+            else:
+                self.value = uuid.UUID(uuidtext)
+                
+                
     def __init__(self, desc, **kw):
-        self.description = Field(desc)
+        self.description = Task.Field(desc)
         self.tw_id = self.tw_uuid = self.ss_uuid = None
         self.scheduled = self.due = self.modified = None
         self.assignee = self.depends = self.status = None
         
         if kw.has_key('tw_id'):
-            self.tw_id = Field(kw['tw_id'])
+            self.tw_id = Task.Field(kw['tw_id'])
         if kw.has_key('tw_uuid'):
-            self.tw_uuid = UuidField(kw['tw_uuid'])
+            self.tw_uuid = Task.UuidField(kw['tw_uuid'])
         if kw.has_key('ss_uuid'):
-            self.ss_uuid = Field(kw['ss_uuid'])
+            self.ss_uuid = Task.Field(kw['ss_uuid'])
         if kw.has_key('scheduled'):
-            self.scheduled = DateField(kw['scheduled'])
+            self.scheduled = Task.DateField(kw['scheduled'])
         if kw.has_key('due'):
-            self.due = DateField(kw['due'])
+            self.due = Task.DateField(kw['due'])
         if kw.has_key('modified'):
-            self.modified = DateField(kw['modified'])
+            self.modified = Task.DateField(kw['modified'])
         if kw.has_key('assignee'):
-            self.assignee = Field(kw['assignee'])
+            self.assignee = Task.Field(kw['assignee'])
         if kw.has_key('depends'):
-            self.depends = Field(kw['depends'])
+            self.depends = Task.Field(kw['depends'])
         if kw.has_key('status'):
-            self.status = Field(kw['status'])
+            self.status = Task.Field(kw['status'])
 
         
     def dump(self):
