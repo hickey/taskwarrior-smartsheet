@@ -102,18 +102,27 @@ class ConfigStore:
 
 
     def _save_config(self):
-        print "config = %s" % self.config
         with open(self.conf_file, 'w') as fh:
             json.dump(self.config, fh)
 
 
 class Field:
     def __init__(self, value):
-        self.value = value
+        if value.__class__ == str:
+            self.value = value
+        elif value.__class__ == int:
+            self.value = str(value)
+        elif value.__class__ == smartsheet.models.cell.Cell:
+            self.value = value.value
+        else:
+            raise RuntimeError('Unknown field format: (%s)%s' % (value.__class__, value))
         
-    def __repr__(self):
-        return self.value
-        
+    def __str__(self):
+        if self.value:
+            return self.value
+        else:
+            return 'None'
+            
         
 class DateField(Field):
     
@@ -126,10 +135,19 @@ class DateField(Field):
                 self.value = date_parse(datetext)
             else:
                 raise RuntimeError('Unknown string date format: %s' % datetext)
+        elif datetext.__class__ == smartsheet.models.cell.Cell:
+            if datetext.value is None:
+                self.value = None
+            else:
+                self.value = date_parse(datetext.value)
         elif datetext is None:
             self.value = None
         else:
             raise RuntimeError('Unknown date format: %s' % datetext)
+            
+    def __str__(self):
+        return self.value.__str__()
+        
            
 class UuidField(Field):
     import uuid
@@ -145,6 +163,9 @@ class Task:
     
     def __init__(self, desc, **kw):
         self.description = Field(desc)
+        self.tw_id = self.tw_uuid = self.ss_uuid = None
+        self.scheduled = self.due = self.modified = None
+        self.assignee = self.depends = self.status = None
         
         if kw.has_key('tw_id'):
             self.tw_id = Field(kw['tw_id'])
@@ -165,6 +186,18 @@ class Task:
         if kw.has_key('status'):
             self.status = Field(kw['status'])
 
+        
+    def dump(self):
+        print("---")
+        print("(%s)%s - %s" % (self.tw_id, self.description, self.tw_uuid))
+        print("\tstatus   : %s" % self.status)
+        print("\tscheduled: %s" % self.scheduled)
+        print("\tdue      : %s" % self.due)
+        print("\tmodified : %s" % self.modified)
+        print("\tss_uuid  : %s" % self.ss_uuid)
+        print("\tassignee : %s" % self.assignee)
+        print("\tdepends  : %s" % self.depends)
+        
         
     def __repr__(self):
         return "<Task: %s>" % self.description
@@ -264,34 +297,94 @@ class SheetAPI:
                 if sheet.rows[row_num+1].parent_id == row_data.id:
                     continue
                 
-                task = Task(self._extract(row_data, entry['cols']['description']),
-                            tw_id=row_data.id,
-                            scheduled=self._extract(row_data, entry['cols']['scheduled']),
-                            due=self._extract(row_data, entry['cols']['due']),
-                            assignee=self._extract(row_data, entry['cols']['assignee']),
-                            status=self._extract(row_data, entry['cols']['status']),
+                task = Task(row_data.get_column(entry['cols']['description']),
+                            ss_uuid='%s::%s' % (sheet.id, row_data.id),
+                            scheduled=row_data.get_column(entry['cols']['scheduled']),
+                            due=row_data.get_column(entry['cols']['due']),
+                            assignee=row_data.get_column(entry['cols']['assignee']),
+                            status=row_data.get_column(entry['cols']['status']),
                             modified=row_data.modified_at)
-
+                #task.dump()
+                
                 # save task information
                 tasks.append(task)
             
         return tasks
+
+
+    def merge(self, tasks):
+        """merge(tasks)
+        Take an array of Task objects and apply them to the specified 
+        Smartsheet sheets. """
         
+        processed = []
+        
+        # Gather a list of sheet_ids involved
+        sheet_ids = map(lambda t: (t['ss_uuid'].split('::'))[0], tasks)
+        
+        # Consolidate the updates according to the sheet that they are on
+        for sheet_id in sheet_ids:
+            # Each sheet may use a different API key, so we create a
+            # new API connection for each sheet
+            proj_settings = self.config.project_settings(sheet_id)
+            api = smartsheet.Smartsheet(proj_settings['key'])
+            row_updates = []
             
-        
+            # Filter out the tasks for a specific sheet
+            for task in filter(lambda t: t['ss_uuid'].startswith(sheet_id), tasks):
+                # Retrive the row to recieve the updates
+                row_id = (task['ss_uuid'].split('::'))[1]
+                row_data = api.Sheets.get_row(sheet_id, row_id)
+                changed = False
+                
+                # Update description
+                col_id = proj_settings['cols']['description']
+                if task.description != row_data.get_column(col_id):
+                    row_data.set_column(col_id, task.description)
+                    changed = True
+                    
+                # Update start date, only on project sheets
+                if proj_settings['cols'].has_key('scheduled'):
+                    col_id = proj_settings['cols']['scheduled']
+                    if task.scheduled != row_data.get_column(col_id):
+                        row_data.set_column(col_id, task.scheduled)
+                        changed = True
+                
+                # Update finish date
+                col_id = proj_settings['cols']['due']
+                if task.due != row_data.get_column(col_id):
+                    row_data.set_column(col_id, task.due)
+                    changed = True
+                    
+                # Update status
+                if proj_settings['cols'].has_key('done'):
+                    col_id = proj_settings['cols']['done']
+                    if task.status != row_data.get_column(col_id):
+                        row_data.set_column(col_id, task.status)
+                        changed = True
+                if proj_settings['cols'].has_key('status'):
+                    col_id = proj_settings['cols']['status']
+                    if task.status != row_data.get_column(col_id):
+                        row_data.set_column(col_id, task.status)
+                        changed = True
+                
+                if changed:
+                    processed.append(task)
+                    row_updates.append(row_data)
+                    
+            # Update the rows on the sheet if any have changed
+            api.Sheets.update_rows(sheet_id, row_updates)
+            
+        return processed
+
+
     def _find_col_id(self, col_def, title):
         for cdef in col_def:
             if cdef.title == title:
                 return cdef.id
         return None
 
-    def _extract(self, data, col_id):
-        for cell in data.cells:
-            if cell.column_id == col_id:
-                return cell.value
-        return None
-        
-        
+
 
 class Warrior:
     
@@ -305,47 +398,25 @@ class Warrior:
         
     def gather_tasks(self):
         
-        tasks = self.tw.load_tasks()
+        tw_tasks = self.tw.load_tasks()
         
-        completed = filter(lambda x: x.has_key('ss_uuid'), tasks['completed'])
-        pending = filter(lambda x: x.has_key('ss_uuid'), tasks['pending'])
-        ss_tasks = completed + pending
+        completed = filter(lambda x: x.has_key('ss_uuid'), tw_tasks['completed'])
+        pending = filter(lambda x: x.has_key('ss_uuid'), tw_tasks['pending'])
+        smartsheet_tasks = completed + pending
         
         # Normalize all the Smartsheet tasks
-        norm_task = []
-        for task in ss_tasks:
+        norm_tasks = []
+        for ss_task in smartsheet_tasks:
             
-            intermediate = { 'id': task['ss_uuid'],
-                             'description': task['description'],
-                             'scheduled': task['scheduled'], 
-                             'due': task['due'],
-                             
+            task = Task(ss_task['description'], tw_uuid=ss_task['uuid'],
+                        tw_id=ss_task['id'], ss_uuid=ss_task['ss_uuid'],
+                        scheduled=ss_task['scheduled'], due=ss_task['due'],
+                        status=ss_task['status'], modified=ss_task['modified'])
+            task.debug()
+            norm_tasks.append(task)
             
-        }
-            
-            task_data['id'] = row_data.id
-            
-            # description
-            task_data['description'] = self._extract(row_data, 
-                                            entry['cols']['description'])
-            # scheduled
-            task_data['scheduled'] = self._extract(row_data, 
-                                            entry['cols']['scheduled'])
-            # due
-            task_data['due'] = self._extract(row_data, 
-                                            entry['cols']['due'])
-            # assignee
-            task_data['assignee'] = self._extract(row_data, 
-                                            entry['cols']['assignee'])
-            # done
-            task_data['depends'] = self._extract(row_data, 
-                                            entry['cols']['depends'])
-            # status
-            task_data['status'] = self._extract(row_data, 
-                                            entry['cols']['status'])
-            
-            task_data['modify_at'] = row_data.modified_at
-            
+        return norm_tasks
+        
 
 if __name__ == '__main__':
     
@@ -424,13 +495,18 @@ if __name__ == '__main__':
             config.save()
             
         elif args.command == 'sync':
-            # retrieve a list of tasks from Smartsheet
-            ss_tasks = api.gather_tasks()
-
             # retrieve a list of linked tasks from TaskWarrior
             war = Warrior(config)
             tw_tasks = war.gather_tasks()
             
+            # Update Smartsheet sheet
+            api.merge(tw_tasks)
+            
+            # retrieve a list of tasks from Smartsheet
+            ss_tasks = api.gather_tasks()
+            
+            # Update TaskWarrior tasks
+            #war.merge(ss_tasks)
             
         elif args.command == 'info':
             api = smartsheet.Smartsheet(config.default_key())
