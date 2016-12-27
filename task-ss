@@ -4,6 +4,7 @@ import os,sys,re
 import argparse
 import logging
 import json
+import uuid
 
 from taskw import TaskWarrior
 from smartsheet import *
@@ -105,7 +106,7 @@ class ConfigStore:
         with open(self.conf_file, 'w') as fh:
             json.dump(self.config, fh)
 
-             
+
 
 class Task:
     
@@ -113,6 +114,8 @@ class Task:
         def __init__(self, value):
             if value.__class__ == str:
                 self.value = value
+            elif value.__class__ == unicode:
+                self.value = str(value)
             elif value.__class__ == int:
                 self.value = str(value)
             elif value.__class__ == smartsheet.models.cell.Cell:
@@ -126,6 +129,56 @@ class Task:
             else:
                 return 'None'
             
+        def __repr__(self):
+            if self.value:
+                return self.value
+            else:
+                return 'None'
+                
+        def __call__(self):
+            if self.value:
+                return self.value
+            else:
+                return 'None'
+        
+        def __eq__(self, other):
+            if not self.value:
+                return False
+            elif not other: 
+                return False
+            elif other.__class__ == smartsheet.models.cell.Cell:
+                return self.value == other.value
+            else:
+                return self.value == other
+                
+        def __ne__(self, other):
+            if not self.value:
+                return False
+            elif not other:
+                return True
+            elif other.__class__ == smartsheet.models.cell.Cell:
+                return self.value != other.value
+            else:
+                return self.value != other
+
+
+    class NullField(Field):
+        
+        def __init__(self):
+            pass
+
+        def tw_date(self):
+            return None
+            
+        def ss_date(self):
+            return None
+            
+        def __str__(self):
+            return ''
+        
+        def __repr__(self):
+            return ''
+        
         
     class DateField(Field):
     
@@ -136,6 +189,8 @@ class Task:
                 if re.match(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\+\d\d:\d\d)?', datetext):
                     # 2016-12-24T18:43:12+00:00
                     self.value = date_parse(datetext)
+                elif not datetext:
+                    self.value = None
                 else:
                     raise RuntimeError('Unknown string date format: %s' % datetext)
             elif datetext.__class__ == smartsheet.models.cell.Cell:
@@ -147,26 +202,95 @@ class Task:
                 self.value = None
             else:
                 raise RuntimeError('Unknown date format: %s' % datetext)
-            
-        def __str__(self):
-            return self.value.__str__()
         
-           
+        
+        def tw_date(self):
+            if self.value:
+                return self.value.strftime("%Y-%m-%d")
+            return None
+            
+        def ss_date(self):
+            if self.value:
+                return self.value.strftime("%Y-%m-%d")
+            return None
+            
+        def detail(self):
+            if self.value:
+                return self.value.strftime('%Y-%m-%dT-%H:%M:%S')
+
+        def __str__(self):
+            if self.value:
+                return self.value.strftime("%Y-%m-%d")
+            return ''
+            
+        def __call__(self):
+            if self.value:
+                return self.value.strftime("%Y-%m-%d")
+        
+        def __eq__(self, other):
+            if not self.value:
+                return False
+            elif not other: 
+                return False
+            elif other.__class__ == smartsheet.models.cell.Cell:
+                return self.value.strftime("%Y%m%d") == date_parse(other.value).strftime("%Y%m%d")
+            else:
+                return self.value.strftime("%Y%m%d") == date_parse(other).strftime("%Y%m%d")
+                
+        def __ne__(self, other):
+            if not self.value:
+                return False
+            elif not other: 
+                return True
+            elif other.__class__ == smartsheet.models.cell.Cell:
+                return self.value.strftime("%Y%m%d") != date_parse(other.value).strftime("%Y%m%d")
+            else:
+                return self.value.strftime("%Y%m%d") != date_parse(other).strftime("%Y%m%d")
+                
+                
     class UuidField(Field):
-        import uuid
     
         def __init__(self, uuidtext):
             if uuidtext.__class__ == uuid.UUID:
                 self.value = uuidtext
             else:
                 self.value = uuid.UUID(uuidtext)
+
+        def __str__(self):
+            return str(self.value)
+
+
+    class StatusField(Field):
+        
+        def __init__(self, statustext):
+            if statustext.__class__ == smartsheet.models.cell.Cell:
+                if statustext.value =='Not Started':
+                    self.value = 'pending'
+                elif statustext.value == 'In Progress':
+                    self.value = 'started'
+                elif statustext.value == 'Completed':
+                    self.value = 'done'
+                else:
+                    self.value = None
+            else:
+                self.value = statustext
+
+        def tw_label(self):
+            return str(self.value)
+            
+        def ss_label(self):
+            if self.value == 'pending':
+                return 'Not Started'
+            elif self.value == 'completed':
+                return 'Complete'
                 
-                
+
     def __init__(self, desc, **kw):
         self.description = Task.Field(desc)
-        self.tw_id = self.tw_uuid = self.ss_uuid = None
-        self.scheduled = self.due = self.modified = None
-        self.assignee = self.depends = self.status = None
+        self.tw_id = self.tw_uuid = self.ss_uuid = Task.NullField()
+        self.scheduled = self.due = self.modified = Task.NullField()
+        self.assignee = self.depends = self.status = Task.NullField()
+        self.project = Task.NullField()
         
         if kw.has_key('tw_id'):
             self.tw_id = Task.Field(kw['tw_id'])
@@ -185,13 +309,16 @@ class Task:
         if kw.has_key('depends'):
             self.depends = Task.Field(kw['depends'])
         if kw.has_key('status'):
-            self.status = Task.Field(kw['status'])
+            self.status = Task.StatusField(kw['status'])
+        if kw.has_key('project'):
+            self.project = Task.Field(kw['project'])
 
         
     def dump(self):
         print("---")
         print("(%s)%s - %s" % (self.tw_id, self.description, self.tw_uuid))
         print("\tstatus   : %s" % self.status)
+        print("\tproject  : %s" % self.project)
         print("\tscheduled: %s" % self.scheduled)
         print("\tdue      : %s" % self.due)
         print("\tmodified : %s" % self.modified)
@@ -202,7 +329,7 @@ class Task:
         
     def __repr__(self):
         return "<Task: %s>" % self.description
-        
+
         
 class SheetAPI:
     
@@ -279,37 +406,54 @@ class SheetAPI:
     def gather_tasks(self):
         
         tasks = []
-    
-        
+
         for entry in self.config.projects():
+            logger.info('Gathering tasks for project %s' % entry['name'])
             # create an api connection to retreive sheet
             api = smartsheet.Smartsheet(entry['key'])
+            logger.debug('SheetAPI.gather_tasks():Connected to Smartsheet API using key %s' % entry['key'])
             
             # retrieve sheet
             sheet = api.Sheets.get_sheet(entry['id'])
+            logger.debug('SheetAPI.gather_tasks():Retrieved sheet %d' % sheet.id)
             
             # walk through rows
-            row_count = len(sheet.rows) - 1
+            row_count = len(sheet.rows)
             for row_num in range(row_count):
                 task_data = {}
                 row_data = sheet.rows[row_num]
                 
                 # Is this row a heading?
-                if sheet.rows[row_num+1].parent_id == row_data.id:
+                if (row_num < row_count-1) and (sheet.rows[row_num+1].parent_id == row_data.id):
                     continue
                 
-                task = Task(row_data.get_column(entry['cols']['description']),
-                            ss_uuid='%s::%s' % (sheet.id, row_data.id),
-                            scheduled=row_data.get_column(entry['cols']['scheduled']),
-                            due=row_data.get_column(entry['cols']['due']),
-                            assignee=row_data.get_column(entry['cols']['assignee']),
-                            status=row_data.get_column(entry['cols']['status']),
-                            modified=row_data.modified_at)
+                if sheet.gantt_enabled:
+                    # Project sheet
+                    task = Task(row_data.get_column(entry['cols']['description']),
+                                ss_uuid='%s::%s' % (sheet.id, row_data.id),
+                                scheduled=row_data.get_column(entry['cols']['scheduled']),
+                                due=row_data.get_column(entry['cols']['due']),
+                                assignee=row_data.get_column(entry['cols']['assignee']),
+                                status=row_data.get_column(entry['cols']['status']),
+                                modified=sheet.modified_at, project=entry['name'])
+                else:
+                    # Taks list sheet
+                    task = Task(row_data.get_column(entry['cols']['description']),
+                                ss_uuid='%s::%s' % (sheet.id, row_data.id),
+                                due=row_data.get_column(entry['cols']['due']),
+                                assignee=row_data.get_column(entry['cols']['assignee']),
+                                status=row_data.get_column(entry['cols']['status']),
+                                done=row_data.get_column(entry['cols']['done']),
+                                modified=sheet.modified_at, project=entry['name'])
+                
+                logger.debug('SheetAPI.gather_tasks():Discovered %s' % task)
+                logger.debug(row_data.get_column(entry['cols']['done']))
                 #task.dump()
                 
                 # save task information
                 tasks.append(task)
             
+        logger.info('Gathered %d tasks from sheets' % len(tasks))
         return tasks
 
 
@@ -319,61 +463,101 @@ class SheetAPI:
         Smartsheet sheets. """
         
         processed = []
-        
+        sheet_timestamps = {}
         # Gather a list of sheet_ids involved
-        sheet_ids = map(lambda t: (t['ss_uuid'].split('::'))[0], tasks)
+        sheet_ids = map(lambda t: (t.ss_uuid.value.split('::'))[0], tasks)
         
         # Consolidate the updates according to the sheet that they are on
-        for sheet_id in sheet_ids:
+        for sheet_id in set(sheet_ids):
             # Each sheet may use a different API key, so we create a
             # new API connection for each sheet
-            proj_settings = self.config.project_settings(sheet_id)
+            try:
+                proj_settings = self.config.project_settings(sheet_id)
+            except KeyError:
+                # project settings no longer available
+                logger.debug('SheetAPI.merge():No project settings for sheet %s' % sheet_id)
+                continue
+                
             api = smartsheet.Smartsheet(proj_settings['key'])
+            sheet = api.Sheets.get_sheet(sheet_id)
+            sheet_timestamps[sheet_id] = sheet.modified_at
             row_updates = []
+            total_changes = 0
             
             # Filter out the tasks for a specific sheet
-            for task in filter(lambda t: t['ss_uuid'].startswith(sheet_id), tasks):
+            for task in filter(lambda t: t.ss_uuid.value.startswith(sheet_id), tasks):
                 # Retrive the row to recieve the updates
-                row_id = (task['ss_uuid'].split('::'))[1]
+                row_id = (task.ss_uuid.value.split('::'))[1]
                 row_data = api.Sheets.get_row(sheet_id, row_id)
-                changed = False
+                changed = 0
                 
+                # Check the modification times to determine if we should update
+                if sheet_timestamps[sheet_id] > task.modified.value:
+                    logger.debug("SheetAPI.merge():Smartsheet newer, canceling modifications")
+                    continue
+                    
                 # Update description
                 col_id = proj_settings['cols']['description']
                 if task.description != row_data.get_column(col_id):
-                    row_data.set_column(col_id, task.description)
-                    changed = True
+                    logger.debug('SheetAPI.merge():Updating task name: "%s" to "%s"' % \
+                        (row_data.get_column(col_id).value, str(task.description)))
+                    row_data.set_column(col_id, str(task.description))
+                    changed += 1
                     
                 # Update start date, only on project sheets
                 if proj_settings['cols'].has_key('scheduled'):
                     col_id = proj_settings['cols']['scheduled']
-                    if task.scheduled != row_data.get_column(col_id):
-                        row_data.set_column(col_id, task.scheduled)
-                        changed = True
+                    if task.scheduled != self._ymd(row_data.get_column(col_id)):
+                        logger.debug('SheetAPI.merge():Updating start date: "%s" to "%s"' % \
+                            (self._ymd(row_data.get_column(col_id).value), 
+                            str(task.scheduled)))
+                        row_data.set_column(col_id, task.scheduled.ss_date())
+                        changed += 1
                 
                 # Update finish date
                 col_id = proj_settings['cols']['due']
-                if task.due != row_data.get_column(col_id):
-                    row_data.set_column(col_id, task.due)
-                    changed = True
+                if task.due != self._ymd(row_data.get_column(col_id)):
+                    logger.debug('SheetAPI.merge():Updating finish date: "%s" to "%s"' % \
+                        (self._ymd(row_data.get_column(col_id).value), 
+                        str(task.due)))
+                    row_data.set_column(col_id, task.due.ss_date())
+                    changed += 1
                     
                 # Update status
                 if proj_settings['cols'].has_key('done'):
                     col_id = proj_settings['cols']['done']
-                    if task.status != row_data.get_column(col_id):
-                        row_data.set_column(col_id, task.status)
-                        changed = True
+                    if row_data.get_column(col_id):
+                        ss_done = row_data.get_column(col_id).value
+                    else:
+                        ss_done = False
+                        
+                    if str(task.status) == 'completed':
+                        new_ss_done = True
+                    else:
+                        new_ss_done = False
+                        
+                    if new_ss_done != ss_done:
+                        logger.debug('SheetAPI.merge():Updating done checkbox: "%s" to "%s"' % \
+                            (ss_done, new_ss_done))
+                        row_data.set_column(col_id, new_ss_done)
+                        changed += 1
                 if proj_settings['cols'].has_key('status'):
                     col_id = proj_settings['cols']['status']
-                    if task.status != row_data.get_column(col_id):
-                        row_data.set_column(col_id, task.status)
-                        changed = True
+                    if task.status != row_data.get_column(col_id).value:
+                        logger.debug('SheetAPI.merge():Updating status: "%s" to "%s"' % \
+                            (row_data.get_column(col_id).value, 
+                            task.status.ss_label()))
+                        row_data.set_column(col_id, str(task.status))
+                        changed += 1
                 
                 if changed:
+                    total_changes += changed 
                     processed.append(task)
                     row_updates.append(row_data)
                     
             # Update the rows on the sheet if any have changed
+            logger.info('Updating sheet %s with %d changes on %d rows' % \
+                (sheet_id, total_changes, len(row_updates)))
             api.Sheets.update_rows(sheet_id, row_updates)
             
         return processed
@@ -385,7 +569,16 @@ class SheetAPI:
                 return cdef.id
         return None
 
-
+    def _ymd(self, datetext):
+        if datetext:
+            if datetext.__class__ == smartsheet.models.cell.Cell:
+                if datetext.value:
+                    return date_parse(datetext.value).strftime("%Y-%m-%d")
+                else:
+                    return None
+            else:
+                return date_parse(datetext).strftime("%Y-%m-%d")
+        return None
 
 class Warrior:
     
@@ -404,20 +597,116 @@ class Warrior:
         completed = filter(lambda x: x.has_key('ss_uuid'), tw_tasks['completed'])
         pending = filter(lambda x: x.has_key('ss_uuid'), tw_tasks['pending'])
         smartsheet_tasks = completed + pending
+        logger.debug('Warrior.gather_tasks():Found %d TaskWarrior tasks' % len(smartsheet_tasks))
         
         # Normalize all the Smartsheet tasks
         norm_tasks = []
         for ss_task in smartsheet_tasks:
+            # Fill in fields that may be missing
+            if not ss_task.has_key('scheduled'):
+                ss_task['scheduled'] = ''
+            if not ss_task.has_key('due'):
+                ss_task['due'] = ''
+            if not ss_task.has_key('modified'):
+                ss_task['scheduled'] = ''
             
             task = Task(ss_task['description'], tw_uuid=ss_task['uuid'],
                         tw_id=ss_task['id'], ss_uuid=ss_task['ss_uuid'],
                         scheduled=ss_task['scheduled'], due=ss_task['due'],
                         status=ss_task['status'], modified=ss_task['modified'])
-            task.debug()
+            logger.debug('Warrior.gather_tasks():%s' % task)
+            #task.dump()
             norm_tasks.append(task)
             
         return norm_tasks
         
+        
+    def merge(self, tasks):
+        """merge(tasks)
+        Take an array of Task objects and apply them to the TaskWarrior
+        database. """
+        
+        processed = []
+        
+        # Walk through each task and process updates
+        for task in tasks:
+            # Look for a matching TaskWarrior task 
+            tw_task = (self.tw.get_task(ss_uuid=task.ss_uuid()))[1]
+            if not tw_task:
+                # Task does not yet exit, 
+                attrs = {'ss_uuid': task.ss_uuid()}
+                if task.scheduled.tw_date():
+                    attrs['scheduled'] = task.scheduled.tw_date()
+                if task.due.tw_date():
+                    attrs['due'] = task.due.tw_date()
+                if task.project:
+                    attrs['project'] = task.project()
+                
+                tw_task = self.tw.task_add(task.description())
+                tw_task.update(attrs)
+                self.tw.task_update(tw_task)
+                
+            elif task.modified.value > tw_task['modified']:
+                # TaskWarrior task needs to be updated
+                
+                # Update description
+                if task.description != tw_task['description']:
+                    logger.debug('Warrior.merge():Updating task name: "%s" to "%s"' % \
+                        (tw_task['description'], str(task.description)))
+                    tw_task.update({'description': str(task.description)})
+                    self.tw.task_update(tw_task)
+                    #changed += 1
+                    
+                ## Update start date, only on project sheets
+                #if proj_settings['cols'].has_key('scheduled'):
+                #    col_id = proj_settings['cols']['scheduled']
+                #    if task.scheduled != self._ymd(row_data.get_column(col_id)):
+                #        logger.debug('SheetAPI.merge():Updating start date: "%s" to "%s"' % \
+                #            (self._ymd(row_data.get_column(col_id).value), 
+                #            str(task.scheduled)))
+                #        row_data.set_column(col_id, task.scheduled.ss_date())
+                #        changed += 1
+                #
+                ## Update finish date
+                #col_id = proj_settings['cols']['due']
+                #if task.due != self._ymd(row_data.get_column(col_id)):
+                #    logger.debug('SheetAPI.merge():Updating finish date: "%s" to "%s"' % \
+                #        (self._ymd(row_data.get_column(col_id).value), 
+                #        str(task.due)))
+                #    row_data.set_column(col_id, task.due.ss_date())
+                #    changed += 1
+                #    
+                ## Update status
+                #if proj_settings['cols'].has_key('done'):
+                #    col_id = proj_settings['cols']['done']
+                #    if row_data.get_column(col_id):
+                #        ss_done = row_data.get_column(col_id).value
+                #    else:
+                #        ss_done = False
+                #        
+                #    if str(task.status) == 'completed':
+                #        new_ss_done = True
+                #    else:
+                #        new_ss_done = False
+                #        
+                #    if new_ss_done != ss_done:
+                #        logger.debug('SheetAPI.merge():Updating done checkbox: "%s" to "%s"' % \
+                #            (ss_done, new_ss_done))
+                #        row_data.set_column(col_id, new_ss_done)
+                #        changed += 1
+                #if proj_settings['cols'].has_key('status'):
+                #    col_id = proj_settings['cols']['status']
+                #    if task.status != row_data.get_column(col_id).value:
+                #        logger.debug('SheetAPI.merge():Updating status: "%s" to "%s"' % \
+                #            (row_data.get_column(col_id).value, 
+                #            task.status.ss_label()))
+                #        row_data.set_column(col_id, str(task.status))
+                #        changed += 1
+                #        
+                        
+        return processed
+
+
 
 if __name__ == '__main__':
     
@@ -441,6 +730,10 @@ if __name__ == '__main__':
     parser.add_argument('--config', '-f', default=CONF_FILE, type=str, 
                         metavar='FILE',
                         help='Read specified config file for API keys')
+    parser.add_argument('--verbose', '-v', action='store_true', 
+                        help='Display progress during syncing')
+    parser.add_argument('--debug', '-d', action='store_true',
+                        help='Show internal program state and progress')
     parser.add_argument('command', type=str, nargs='?',
                         choices=['add', 'delete', 'modify', 'sync', 'info'])
     
@@ -448,10 +741,16 @@ if __name__ == '__main__':
     args = parser.parse_args()
     
     
-    #logging.basicConfig()
-    #logging.getLogger().setLevel(logging.DEBUG)
-    #requests_log = logging.getLogger("requests.packages.urllib3")
-    #requests_log.setLevel(logging.DEBUG)
+    logging.basicConfig()
+    logger = logging.getLogger('task-ss')
+    if args.debug:
+        logger.setLevel(logging.DEBUG)
+    elif args.verbose:
+        logger.setLevel(logging.INFO)
+    else:
+        logger.setLevel(logging.WARN)
+    smartsheet_log = logging.getLogger("smartsheet")
+    smartsheet_log.setLevel(logging.ERROR)
     #requests_log.propagate = True
     
     
@@ -497,17 +796,26 @@ if __name__ == '__main__':
             
         elif args.command == 'sync':
             # retrieve a list of linked tasks from TaskWarrior
+            logger.info('Gathering TaskWarrior tasks')
             war = Warrior(config)
             tw_tasks = war.gather_tasks()
             
             # Update Smartsheet sheet
-            api.merge(tw_tasks)
+            logger.info('Sending updates to Smartsheet')
+            proc_tasks = api.merge(tw_tasks)
             
             # retrieve a list of tasks from Smartsheet
+            logging.info('Gathering Smartsheet tasks')
             ss_tasks = api.gather_tasks()
             
             # Update TaskWarrior tasks
-            #war.merge(ss_tasks)
+            updated_tasks = filter(lambda t: not t in proc_tasks, ss_tasks) 
+            print "updated_tasks=%s" % updated_tasks
+            #for task in updated_tasks:
+            #    task.dump()
+                
+            logger.info('Sending update to TaskWarrior')
+            war.merge(updated_tasks)
             
         elif args.command == 'info':
             api = smartsheet.Smartsheet(config.default_key())
